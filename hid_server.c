@@ -18,18 +18,50 @@
 #define AXIS_MIN -32768
 #define AXIS_MAX 32767
 
-// 0 = Xbox Layout, 1 = Nintendo Layout
-int nintendo_layout = 1;
+int nintendo_layout = 1; // Default, will be overwritten by config.conf
+
+// Combo State Tracking (Prevents "stuck" buttons if released in wrong order)
 int menu_pressed = 0;
+int home_combo_active = 0;
+int l3_combo_active = 0;
+int r3_combo_active = 0;
 
 volatile sig_atomic_t keep_running = 1;
 
 void handle_signal(int sig) { keep_running = 0; }
 
+// --- CONFIGURATION PARSER ---
+void load_config() {
+    FILE *fp = fopen("config.conf", "r");
+    if (!fp) {
+        printf("[*] config.conf not found. Generating default file...\n");
+        fp = fopen("config.conf", "w");
+        if (fp) {
+            fprintf(fp, "# TrimUI Gamepad Configuration\n");
+            fprintf(fp, "# nintendo_layout: 1 = Nintendo (A Right, B Down), 0 = Xbox (A Down, B Right)\n");
+            fprintf(fp, "nintendo_layout=1\n");
+            fclose(fp);
+        }
+        nintendo_layout = 1;
+        return;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        if (line[0] == '#' || line[0] == '\n') continue;
+        int val;
+        if (sscanf(line, "nintendo_layout=%d", &val) == 1) {
+            nintendo_layout = val;
+        }
+    }
+    fclose(fp);
+    printf("[*] Config Loaded: nintendo_layout = %d\n", nintendo_layout);
+}
+
 // --- HID REPORT STRUCTURE ---
 // [0]: 0xA1 (Bluetooth Header)
 // [1]: Buttons 1-8 (Bits: A, B, [Skip C], X, Y, [Skip Z], L1, R1)
-// [2]: Buttons 9-16 (Bits: L2, R2, Select, Start, [Skip Mode], L3, R3)
+// [2]: Buttons 9-16 (Bits: L2, R2, Select, Start, Mode/Home, L3, R3)
 // [3]: LX, [4]: LY, [5]: RX, [6]: RY, [7]: Hat Switch
 uint8_t hid_report[8] = {0xA1, 0x00, 0x00, 0x7F, 0x7F, 0x7F, 0x7F, 0x08};
 int32_t hat_x = 0;
@@ -45,28 +77,23 @@ uint8_t gamepad_descriptor[] = {
     0xC0
 };
 
-// --- SOCKET INITIALIZATION ---
+// --- SOCKET & SDP INITIALIZATION ---
 int setup_socket(int psm) {
     struct sockaddr_l2 addr = { 0 };
     int s = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
     if (s < 0) return -1;
-    addr.l2_family = AF_BLUETOOTH;
-    addr.l2_psm = htobs(psm);
+    addr.l2_family = AF_BLUETOOTH; addr.l2_psm = htobs(psm);
     if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(s); return -1; }
     if (listen(s, 1) < 0) { close(s); return -1; }
     return s;
 }
 
-// --- SDP REGISTRATION ---
 sdp_session_t *register_gamepad_sdp() {
     sdp_session_t *session = sdp_connect(BDADDR_ANY, BDADDR_LOCAL, SDP_RETRY_IF_BUSY);
     if (!session) return NULL;
-
     sdp_record_t *record = sdp_record_alloc();
-    uuid_t *hid_uuid = malloc(sizeof(uuid_t));
-    sdp_uuid16_create(hid_uuid, 0x1124);
-    sdp_list_t *svclass_id = sdp_list_append(NULL, hid_uuid);
-    sdp_set_service_classes(record, svclass_id);
+    uuid_t *hid_uuid = malloc(sizeof(uuid_t)); sdp_uuid16_create(hid_uuid, 0x1124);
+    sdp_list_t *svclass_id = sdp_list_append(NULL, hid_uuid); sdp_set_service_classes(record, svclass_id);
     sdp_set_info_attr(record, "Trimui_Gamepad", "TrimUI", "Gamepad");
 
     uint16_t *ctrl_psm = malloc(sizeof(uint16_t)); *ctrl_psm = 0x0011;
@@ -77,7 +104,6 @@ sdp_session_t *register_gamepad_sdp() {
     uint16_t *l2cap_val = malloc(sizeof(uint16_t)); *l2cap_val = 0x0100;
     uint16_t *hidp_val  = malloc(sizeof(uint16_t)); *hidp_val  = 0x0011;
     uint16_t *psm_val   = malloc(sizeof(uint16_t)); *psm_val   = 0x0011;
-
     sdp_data_t *d_l2cap = sdp_data_alloc(SDP_UUID16, l2cap_val);
     sdp_data_t *d_psm   = sdp_data_alloc(SDP_UINT16, psm_val);
     d_l2cap->next = d_psm;
@@ -91,16 +117,13 @@ sdp_session_t *register_gamepad_sdp() {
     uint8_t *desc_type = malloc(sizeof(uint8_t)); *desc_type = 0x22;
     sdp_data_t *d1 = sdp_data_alloc(SDP_UINT8, desc_type);
     sdp_data_t *d2 = sdp_data_alloc_with_length(SDP_TEXT_STR8, gamepad_descriptor, sizeof(gamepad_descriptor));
-    d1->next = d2;
-    sdp_data_t *seq2 = sdp_data_alloc(SDP_SEQ8, d1);
-    sdp_data_t *seq1 = sdp_data_alloc(SDP_SEQ8, seq2);
+    d1->next = d2; sdp_data_t *seq2 = sdp_data_alloc(SDP_SEQ8, d1); sdp_data_t *seq1 = sdp_data_alloc(SDP_SEQ8, seq2);
     sdp_attr_add(record, 0x0206, seq1);
-
     if (sdp_record_register(session, record, 0) < 0) { sdp_close(session); return NULL; }
     return session;
 }
 
-// --- DATA TRANSLATION HELPERS ---
+// --- DATA TRANSLATION ---
 uint8_t map_axis(int32_t value) {
     if (value < AXIS_MIN) return 0;
     if (value > AXIS_MAX) return 255;
@@ -122,46 +145,76 @@ void update_hat_switch() {
 void process_input_event(uint16_t type, uint16_t code, int32_t value) {
     if (type == EV_KEY) {
         int is_p = (value == 1);
-        if (code == 316) menu_pressed = is_p; // Track Menu for combos
+
+        // Track Menu Button State
+        if (code == 316) menu_pressed = is_p;
 
         // Physical Bottom Button (304)
         if (code == 304) {
-            int bit = nintendo_layout ? 1 : 0; // If Nintendo, it's B (Bit 1). If Xbox, it's A (Bit 0).
+            int bit = nintendo_layout ? 1 : 0; // Nintendo = B(1), Xbox = A(0)
             if (is_p) hid_report[1] |= (1 << bit); else hid_report[1] &= ~(1 << bit);
         }
         // Physical Right Button (305)
         else if (code == 305) {
-            int bit = nintendo_layout ? 0 : 1; // If Nintendo, it's A (Bit 0). If Xbox, it's B (Bit 1).
+            int bit = nintendo_layout ? 0 : 1; // Nintendo = A(0), Xbox = B(1)
             if (is_p) hid_report[1] |= (1 << bit); else hid_report[1] &= ~(1 << bit);
         }
-        // Physical Left Button (307)
-        else if (code == 307) {
-            int bit = nintendo_layout ? 4 : 3; // If Nintendo, it's Y (Bit 4). If Xbox, it's X (Bit 3).
-            if (is_p) hid_report[1] |= (1 << bit); else hid_report[1] &= ~(1 << bit);
-        }
-        // Physical Top Button (308)
+        // Physical Left Button (308) - "Y" on Nintendo, "X" on Xbox
         else if (code == 308) {
-            int bit = nintendo_layout ? 3 : 4; // If Nintendo, it's X (Bit 3). If Xbox, it's Y (Bit 4).
+            int bit = nintendo_layout ? 4 : 3; // Nintendo = Y(4), Xbox = X(3)
             if (is_p) hid_report[1] |= (1 << bit); else hid_report[1] &= ~(1 << bit);
         }
 
-        // Bumpers & L3/R3 Combos
-        else if (code == 310) { // L1
-            if (menu_pressed) { if (is_p) hid_report[2] |= (1<<5); else hid_report[2] &= ~(1<<5); } // L3 (Byte 2, Bit 5)
-            else              { if (is_p) hid_report[1] |= (1<<6); else hid_report[1] &= ~(1<<6); } // L1 (Byte 1, Bit 6)
+        // Physical Top Button (307) - "X" on Nintendo, "Y" on Xbox
+        // THIS BUTTON HOSTS THE MENU + X -> GUIDE/HOME COMBO
+        else if (code == 307) {
+            if (is_p && menu_pressed) {
+                hid_report[2] |= (1 << 4); // Trigger Mode/Home Button (Byte 2, Bit 4)
+                home_combo_active = 1;     // Lock the combo state
+            }
+            else if (!is_p && home_combo_active) {
+                hid_report[2] &= ~(1 << 4); // Release Mode/Home Button
+                home_combo_active = 0;
+            }
+            else {
+                int bit = nintendo_layout ? 3 : 4; // Standard Output: Nintendo = X(3), Xbox = Y(4)
+                if (is_p) hid_report[1] |= (1 << bit); else hid_report[1] &= ~(1 << bit);
+            }
         }
-        else if (code == 311) { // R1
-            if (menu_pressed) { if (is_p) hid_report[2] |= (1<<6); else hid_report[2] &= ~(1<<6); } // R3 (Byte 2, Bit 6)
-            else              { if (is_p) hid_report[1] |= (1<<7); else hid_report[1] &= ~(1<<7); } // R1 (Byte 1, Bit 7)
+
+        // L1 & L3 Combo
+        else if (code == 310) {
+            if (is_p && menu_pressed) {
+                hid_report[2] |= (1<<5); // L3
+                l3_combo_active = 1;
+            }
+            else if (!is_p && l3_combo_active) {
+                hid_report[2] &= ~(1<<5);
+                l3_combo_active = 0;
+            }
+            else {
+                if (is_p) hid_report[1] |= (1<<6); else hid_report[1] &= ~(1<<6); // L1
+            }
+        }
+
+        // R1 & R3 Combo
+        else if (code == 311) {
+            if (is_p && menu_pressed) {
+                hid_report[2] |= (1<<6); // R3
+                r3_combo_active = 1;
+            }
+            else if (!is_p && r3_combo_active) {
+                hid_report[2] &= ~(1<<6);
+                r3_combo_active = 0;
+            }
+            else {
+                if (is_p) hid_report[1] |= (1<<7); else hid_report[1] &= ~(1<<7); // R1
+            }
         }
 
         // Select & Start
-        else if (code == 314) { // Select
-            if (is_p) hid_report[2] |= (1<<2); else hid_report[2] &= ~(1<<2); // Select (Byte 2, Bit 2)
-        }
-        else if (code == 315) { // Start
-            if (is_p) hid_report[2] |= (1<<3); else hid_report[2] &= ~(1<<3); // Start (Byte 2, Bit 3)
-        }
+        else if (code == 314) { if (is_p) hid_report[2] |= (1<<2); else hid_report[2] &= ~(1<<2); } // Select
+        else if (code == 315) { if (is_p) hid_report[2] |= (1<<3); else hid_report[2] &= ~(1<<3); } // Start
     }
     else if (type == EV_ABS) {
         switch(code) {
@@ -169,12 +222,8 @@ void process_input_event(uint16_t type, uint16_t code, int32_t value) {
             case 1: hid_report[4] = map_axis(value); break; // LY
             case 3: hid_report[5] = map_axis(value); break; // RX
             case 4: hid_report[6] = map_axis(value); break; // RY
-
-            case 2: // L2 Trigger
-                if (value > 127) hid_report[2] |= (1<<0); else hid_report[2] &= ~(1<<0); break; // L2 (Byte 2, Bit 0)
-            case 5: // R2 Trigger
-                if (value > 127) hid_report[2] |= (1<<1); else hid_report[2] &= ~(1<<1); break; // R2 (Byte 2, Bit 1)
-
+            case 2: if (value > 127) hid_report[2] |= (1<<0); else hid_report[2] &= ~(1<<0); break; // L2
+            case 5: if (value > 127) hid_report[2] |= (1<<1); else hid_report[2] &= ~(1<<1); break; // R2
             case 16: hat_x = value; update_hat_switch(); break;
             case 17: hat_y = value; update_hat_switch(); break;
         }
@@ -186,38 +235,24 @@ int main() {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handle_signal;
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
-    signal(SIGPIPE, SIG_IGN);
+    sigaction(SIGINT, &sa, NULL); sigaction(SIGTERM, &sa, NULL); signal(SIGPIPE, SIG_IGN);
 
-    printf("[*] Starting Gamepad Server. Layout: %s\n", nintendo_layout ? "Nintendo" : "Xbox");
+    load_config(); // Pull variables from config.conf
+    printf("[*] Starting Gamepad Server...\n");
 
     sdp_session_t *sdp_session = register_gamepad_sdp();
-    int ctrl_s = setup_socket(0x11);
-    int intr_s = setup_socket(0x13);
-    if (!sdp_session || ctrl_s < 0 || intr_s < 0) {
-        if(sdp_session) sdp_close(sdp_session);
-        return 1;
-    }
+    int ctrl_s = setup_socket(0x11), intr_s = setup_socket(0x13);
+    if (!sdp_session || ctrl_s < 0 || intr_s < 0) { if(sdp_session) sdp_close(sdp_session); return 1; }
 
     printf("[*] Waiting for host connection...\n");
     int ctrl_c = -1, intr_c = -1;
-
-    while ((ctrl_c = accept(ctrl_s, NULL, NULL)) < 0) {
-        if (errno == EINTR && keep_running) continue; break;
-    }
+    while ((ctrl_c = accept(ctrl_s, NULL, NULL)) < 0) { if (errno == EINTR && keep_running) continue; break; }
     if (ctrl_c >= 0) printf("[+] Control Linked.\n");
-
-    while ((intr_c = accept(intr_s, NULL, NULL)) < 0) {
-        if (errno == EINTR && keep_running) continue; break;
-    }
+    while ((intr_c = accept(intr_s, NULL, NULL)) < 0) { if (errno == EINTR && keep_running) continue; break; }
     if (intr_c >= 0) printf("[+] Interrupt Linked. Host connected.\n");
 
     int input_fd = open("/dev/input/event3", O_RDONLY | O_NONBLOCK);
-    if (input_fd < 0) {
-        perror("[!] Failed to open /dev/input/event3");
-        keep_running = 0;
-    }
+    if (input_fd < 0) { perror("[!] Failed to open /dev/input/event3"); keep_running = 0; }
 
     struct input_event ev;
     fd_set readfds;
@@ -225,28 +260,20 @@ int main() {
     while(keep_running && input_fd >= 0 && intr_c >= 0) {
         FD_ZERO(&readfds);
         FD_SET(input_fd, &readfds);
-
         if (select(input_fd + 1, &readfds, NULL, NULL, NULL) > 0) {
             int report_changed = 0;
-
             while(read(input_fd, &ev, sizeof(ev)) > 0) {
                 process_input_event(ev.type, ev.code, ev.value);
                 report_changed = 1;
             }
-
-            if (report_changed) {
-                if (write(intr_c, hid_report, sizeof(hid_report)) < 0) break;
-            }
+            if (report_changed) { if (write(intr_c, hid_report, sizeof(hid_report)) < 0) break; }
         }
     }
 
     printf("\n[*] Shutting down...\n");
     if (input_fd >= 0) close(input_fd);
-    if (intr_c >= 0) close(intr_c);
-    if (ctrl_c >= 0) close(ctrl_c);
-    if (intr_s >= 0) close(intr_s);
-    if (ctrl_s >= 0) close(ctrl_s);
+    if (intr_c >= 0) close(intr_c); if (ctrl_c >= 0) close(ctrl_c);
+    if (intr_s >= 0) close(intr_s); if (ctrl_s >= 0) close(ctrl_s);
     if (sdp_session) sdp_close(sdp_session);
-
     return 0;
 }
