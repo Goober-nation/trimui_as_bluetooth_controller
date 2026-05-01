@@ -20,7 +20,7 @@
 
 int nintendo_layout = 1; // Default, will be overwritten by config.conf
 
-// Combo State Tracking (Prevents "stuck" buttons if released in wrong order)
+// Combo State Tracking
 int menu_pressed = 0;
 int home_combo_active = 0;
 int l3_combo_active = 0;
@@ -55,25 +55,20 @@ void load_config() {
         }
     }
     fclose(fp);
-    printf("[*] Config Loaded: nintendo_layout = %d\n", nintendo_layout);
 }
 
 // --- HID REPORT STRUCTURE ---
-// [0]: 0xA1 (Bluetooth Header)
-// [1]: Buttons 1-8 (Bits: A, B, [Skip C], X, Y, [Skip Z], L1, R1)
-// [2]: Buttons 9-16 (Bits: L2, R2, Select, Start, Mode/Home, L3, R3)
-// [3]: LX, [4]: LY, [5]: RX, [6]: RY, [7]: Hat Switch
 uint8_t hid_report[8] = {0xA1, 0x00, 0x00, 0x7F, 0x7F, 0x7F, 0x7F, 0x08};
 int32_t hat_x = 0;
 int32_t hat_y = 0;
 
 // --- GAMEPAD REPORT DESCRIPTOR ---
 uint8_t gamepad_descriptor[] = {
-    0x05, 0x01, 0x09, 0x05, 0xA1, 0x01,
-    0x05, 0x09, 0x19, 0x01, 0x29, 0x10, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x10, 0x81, 0x02,
-    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x33, 0x09, 0x34, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02,
-    0x09, 0x39, 0x15, 0x00, 0x25, 0x07, 0x35, 0x00, 0x46, 0x3B, 0x01, 0x65, 0x14, 0x75, 0x04, 0x95, 0x01, 0x81, 0x42,
-    0x75, 0x04, 0x95, 0x01, 0x81, 0x03,
+    0x05, 0x01, 0x09, 0x05, 0xA1, 0x01, 
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x10, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x10, 0x81, 0x02, 
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x33, 0x09, 0x34, 0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02, 
+    0x09, 0x39, 0x15, 0x00, 0x25, 0x07, 0x35, 0x00, 0x46, 0x3B, 0x01, 0x65, 0x14, 0x75, 0x04, 0x95, 0x01, 0x81, 0x42, 
+    0x75, 0x04, 0x95, 0x01, 0x81, 0x03, 
     0xC0
 };
 
@@ -103,23 +98,23 @@ sdp_session_t *register_gamepad_sdp() {
 
     uint16_t *l2cap_val = malloc(sizeof(uint16_t)); *l2cap_val = 0x0100;
     uint16_t *hidp_val  = malloc(sizeof(uint16_t)); *hidp_val  = 0x0011;
-    uint16_t *psm_val   = malloc(sizeof(uint16_t)); *psm_val   = 0x0011;
+    uint16_t *psm_val   = malloc(sizeof(uint16_t)); *psm_val   = 0x0011; 
     sdp_data_t *d_l2cap = sdp_data_alloc(SDP_UUID16, l2cap_val);
     sdp_data_t *d_psm   = sdp_data_alloc(SDP_UINT16, psm_val);
     d_l2cap->next = d_psm;
     sdp_data_t *seq_l2cap = sdp_data_alloc(SDP_SEQ8, d_l2cap);
     sdp_data_t *d_hidp   = sdp_data_alloc(SDP_UUID16, hidp_val);
     sdp_data_t *seq_hidp = sdp_data_alloc(SDP_SEQ8, d_hidp);
-    seq_l2cap->next = seq_hidp;
+    seq_l2cap->next = seq_hidp; 
     sdp_data_t *proto_list_seq = sdp_data_alloc(SDP_SEQ8, seq_l2cap);
-    sdp_attr_add(record, 0x0004, proto_list_seq);
+    sdp_attr_add(record, 0x0004, proto_list_seq); 
 
     uint8_t *desc_type = malloc(sizeof(uint8_t)); *desc_type = 0x22;
     sdp_data_t *d1 = sdp_data_alloc(SDP_UINT8, desc_type);
     sdp_data_t *d2 = sdp_data_alloc_with_length(SDP_TEXT_STR8, gamepad_descriptor, sizeof(gamepad_descriptor));
     d1->next = d2; sdp_data_t *seq2 = sdp_data_alloc(SDP_SEQ8, d1); sdp_data_t *seq1 = sdp_data_alloc(SDP_SEQ8, seq2);
-    sdp_attr_add(record, 0x0206, seq1);
-    if (sdp_record_register(session, record, 0) < 0) { sdp_close(session); return NULL; }
+    sdp_attr_add(record, 0x0206, seq1); 
+    if (sdp_record_register(session, record, 0) < 0) { sdp_close(session); return NULL; } 
     return session;
 }
 
@@ -131,99 +126,108 @@ uint8_t map_axis(int32_t value) {
 }
 
 void update_hat_switch() {
-    if (hat_x == 0 && hat_y == -1)      hid_report[7] = 0;
-    else if (hat_x == 1 && hat_y == -1) hid_report[7] = 1;
-    else if (hat_x == 1 && hat_y == 0)  hid_report[7] = 2;
-    else if (hat_x == 1 && hat_y == 1)  hid_report[7] = 3;
-    else if (hat_x == 0 && hat_y == 1)  hid_report[7] = 4;
-    else if (hat_x == -1 && hat_y == 1) hid_report[7] = 5;
-    else if (hat_x == -1 && hat_y == 0) hid_report[7] = 6;
-    else if (hat_x == -1 && hat_y == -1)hid_report[7] = 7;
-    else hid_report[7] = 8;
+    if (hat_x == 0 && hat_y == -1)      hid_report[7] = 0; 
+    else if (hat_x == 1 && hat_y == -1) hid_report[7] = 1; 
+    else if (hat_x == 1 && hat_y == 0)  hid_report[7] = 2; 
+    else if (hat_x == 1 && hat_y == 1)  hid_report[7] = 3; 
+    else if (hat_x == 0 && hat_y == 1)  hid_report[7] = 4; 
+    else if (hat_x == -1 && hat_y == 1) hid_report[7] = 5; 
+    else if (hat_x == -1 && hat_y == 0) hid_report[7] = 6; 
+    else if (hat_x == -1 && hat_y == -1)hid_report[7] = 7; 
+    else hid_report[7] = 8; 
 }
 
 void process_input_event(uint16_t type, uint16_t code, int32_t value) {
     if (type == EV_KEY) {
         int is_p = (value == 1);
-
+        
         // Track Menu Button State
         if (code == 316) menu_pressed = is_p;
 
         // Physical Bottom Button (304)
         if (code == 304) {
-            int bit = nintendo_layout ? 1 : 0; // Nintendo = B(1), Xbox = A(0)
+            int bit = nintendo_layout ? 1 : 0; 
             if (is_p) hid_report[1] |= (1 << bit); else hid_report[1] &= ~(1 << bit);
         }
         // Physical Right Button (305)
-        else if (code == 305) {
-            int bit = nintendo_layout ? 0 : 1; // Nintendo = A(0), Xbox = B(1)
+        else if (code == 305) { 
+            int bit = nintendo_layout ? 0 : 1; 
             if (is_p) hid_report[1] |= (1 << bit); else hid_report[1] &= ~(1 << bit);
         }
-        // Physical Left Button (308) - "Y" on Nintendo, "X" on Xbox
-        else if (code == 308) {
-            int bit = nintendo_layout ? 4 : 3; // Nintendo = Y(4), Xbox = X(3)
+        // Physical Left Button (308) 
+        else if (code == 308) { 
+            int bit = nintendo_layout ? 4 : 3; 
             if (is_p) hid_report[1] |= (1 << bit); else hid_report[1] &= ~(1 << bit);
         }
-
-        // Physical Top Button (307) - "X" on Nintendo, "Y" on Xbox
-        // THIS BUTTON HOSTS THE MENU + X -> GUIDE/HOME COMBO
-        else if (code == 307) {
+        
+        // Physical Top Button (307) -> MENU + X = HOME COMBO
+        else if (code == 307) { 
             if (is_p && menu_pressed) {
-                hid_report[2] |= (1 << 4); // Trigger Mode/Home Button (Byte 2, Bit 4)
-                home_combo_active = 1;     // Lock the combo state
-            }
+                hid_report[2] |= (1 << 4); 
+                home_combo_active = 1;     
+            } 
             else if (!is_p && home_combo_active) {
-                hid_report[2] &= ~(1 << 4); // Release Mode/Home Button
+                hid_report[2] &= ~(1 << 4); 
                 home_combo_active = 0;
-            }
+            } 
             else {
-                int bit = nintendo_layout ? 3 : 4; // Standard Output: Nintendo = X(3), Xbox = Y(4)
+                int bit = nintendo_layout ? 3 : 4; 
                 if (is_p) hid_report[1] |= (1 << bit); else hid_report[1] &= ~(1 << bit);
             }
         }
-
+        
         // L1 & L3 Combo
-        else if (code == 310) {
-            if (is_p && menu_pressed) {
-                hid_report[2] |= (1<<5); // L3
+        else if (code == 310) { 
+            if (is_p && menu_pressed) { 
+                hid_report[2] |= (1<<5); 
                 l3_combo_active = 1;
-            }
+            } 
             else if (!is_p && l3_combo_active) {
-                hid_report[2] &= ~(1<<5);
+                hid_report[2] &= ~(1<<5); 
                 l3_combo_active = 0;
-            }
-            else {
-                if (is_p) hid_report[1] |= (1<<6); else hid_report[1] &= ~(1<<6); // L1
+            } 
+            else { 
+                if (is_p) hid_report[1] |= (1<<6); else hid_report[1] &= ~(1<<6); 
             }
         }
-
+        
         // R1 & R3 Combo
-        else if (code == 311) {
-            if (is_p && menu_pressed) {
-                hid_report[2] |= (1<<6); // R3
+        else if (code == 311) { 
+            if (is_p && menu_pressed) { 
+                hid_report[2] |= (1<<6); 
                 r3_combo_active = 1;
-            }
+            } 
             else if (!is_p && r3_combo_active) {
-                hid_report[2] &= ~(1<<6);
+                hid_report[2] &= ~(1<<6); 
                 r3_combo_active = 0;
-            }
-            else {
-                if (is_p) hid_report[1] |= (1<<7); else hid_report[1] &= ~(1<<7); // R1
+            } 
+            else { 
+                if (is_p) hid_report[1] |= (1<<7); else hid_report[1] &= ~(1<<7); 
             }
         }
 
-        // Select & Start
-        else if (code == 314) { if (is_p) hid_report[2] |= (1<<2); else hid_report[2] &= ~(1<<2); } // Select
-        else if (code == 315) { if (is_p) hid_report[2] |= (1<<3); else hid_report[2] &= ~(1<<3); } // Start
-    }
+        // Select & Start (AND THE KILL SWITCH)
+        else if (code == 314) { 
+            if (is_p) hid_report[2] |= (1<<2); else hid_report[2] &= ~(1<<2); 
+        } 
+        else if (code == 315) { 
+            if (is_p && menu_pressed) {
+                // FORCE QUIT TRIGGERED: Menu + Start
+                keep_running = 0; 
+            } 
+            else {
+                if (is_p) hid_report[2] |= (1<<3); else hid_report[2] &= ~(1<<3); 
+            }
+        }
+    } 
     else if (type == EV_ABS) {
         switch(code) {
-            case 0: hid_report[3] = map_axis(value); break; // LX
-            case 1: hid_report[4] = map_axis(value); break; // LY
-            case 3: hid_report[5] = map_axis(value); break; // RX
-            case 4: hid_report[6] = map_axis(value); break; // RY
-            case 2: if (value > 127) hid_report[2] |= (1<<0); else hid_report[2] &= ~(1<<0); break; // L2
-            case 5: if (value > 127) hid_report[2] |= (1<<1); else hid_report[2] &= ~(1<<1); break; // R2
+            case 0: hid_report[3] = map_axis(value); break;
+            case 1: hid_report[4] = map_axis(value); break;
+            case 3: hid_report[5] = map_axis(value); break;
+            case 4: hid_report[6] = map_axis(value); break;
+            case 2: if (value > 127) hid_report[2] |= (1<<0); else hid_report[2] &= ~(1<<0); break;
+            case 5: if (value > 127) hid_report[2] |= (1<<1); else hid_report[2] &= ~(1<<1); break;
             case 16: hat_x = value; update_hat_switch(); break;
             case 17: hat_y = value; update_hat_switch(); break;
         }
@@ -235,11 +239,11 @@ int main() {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handle_signal;
-    sigaction(SIGINT, &sa, NULL); sigaction(SIGTERM, &sa, NULL); signal(SIGPIPE, SIG_IGN);
+    sigaction(SIGINT, &sa, NULL); sigaction(SIGTERM, &sa, NULL); signal(SIGPIPE, SIG_IGN); 
 
-    load_config(); // Pull variables from config.conf
+    load_config(); 
     printf("[*] Starting Gamepad Server...\n");
-
+    
     sdp_session_t *sdp_session = register_gamepad_sdp();
     int ctrl_s = setup_socket(0x11), intr_s = setup_socket(0x13);
     if (!sdp_session || ctrl_s < 0 || intr_s < 0) { if(sdp_session) sdp_close(sdp_session); return 1; }

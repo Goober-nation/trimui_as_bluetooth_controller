@@ -1,0 +1,6 @@
+{
+  "label": "Gamepad Mode",
+  "icon": "icon.png",
+  "launch": "start.sh",
+  "description": "Turns the Trimui Smart Pro into a Bluetooth controller."
+}

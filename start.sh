@@ -1,6 +1,18 @@
 #!/bin/sh
 # TrimUI Native HID - Persistent Agent & Logging Edition
 
+# --- CROSSMIX OS ENVIRONMENT SETUP ---
+PATH="/mnt/SDCARD/System/bin:$PATH"
+export LD_LIBRARY_PATH="/mnt/SDCARD/System/lib:/usr/trimui/lib:$LD_LIBRARY_PATH"
+
+AppPath="$(dirname "$0")"
+cd "$AppPath"
+
+# --- DISPLAY UI OVERLAY ---
+# Ensure you have a background.png in this folder!
+/mnt/SDCARD/System/usr/trimui/scripts/infoscreen.sh -i "$AppPath/background.png" -m "Gamepad Mode Active       Press Menu + Start to exit"
+
+# --- BLUETOOTH INITIALIZATION ---
 echo "[*] Cleaning up old states..."
 killall -9 bluetoothd hid_server bluetoothctl hcidump 2>/dev/null
 /etc/init.d/hciattach stop 2>/dev/null
@@ -65,3 +77,16 @@ if [ -x "./hid_server" ]; then
 else
     echo "[!] Error: ./hid_server not found or not executable."
 fi
+
+# --- CLEANUP & TEARDOWN (Triggered by Menu+Start Killswitch) ---
+echo "[*] Cleaning up background tasks..."
+
+# Kill the daemons spawned by this script
+killall -9 bluetoothd bluetoothctl hcidump 2>/dev/null
+
+# Stop hciattach to release the UART/BT hardware back to the OS
+/etc/init.d/hciattach stop 2>/dev/null
+
+# Sync filesystem before returning to CrossMix main menu
+sync
+echo "[+] Teardown complete. Returning to OS."
