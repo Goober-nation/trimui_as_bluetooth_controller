@@ -6,8 +6,11 @@ Works by manually awaking the Bluetooth module and configuring the HID.
 
 ## Shortcuts
 _Menu+Start_ - quit the app
+
 _Menu+L1_ - shortcut for L3
+
 _Menu+R1_ - shortcut for R3
+
 _Menu+Y_ - actual press of the menu button is received on the side of the device the "controller" is connected to
 
 ## Instructions for compilation
